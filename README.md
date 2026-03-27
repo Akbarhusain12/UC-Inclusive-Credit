@@ -10,7 +10,7 @@ The architecture decouples the vision processing from the language reasoning to 
 
 
 ## 2. Deliverables
-* **Demo Video:** [Insert YouTube Unlisted / Loom Link Here]
+* **Demo Video:** https://www.loom.com/share/bf137de172604460b502c07fb428da85
 * **Google Sheet:** https://docs.google.com/spreadsheets/d/1Gpm3dL0u2qr3cGVor4NC4BKGAwDDuHq-1rSFyvgoRv8/edit?usp=sharing
 * **Workflow Code:** `n8n_workflow.json` (Included in repo)
 * **Vision Script:** `vision_extractor.py` (Included in repo)
