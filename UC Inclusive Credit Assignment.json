@@ -1,0 +1,335 @@
+{
+  "name": "UC Inclusive Credit Assignment",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "q": "is:unread has:attachment"
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -48,
+        0
+      ],
+      "id": "83e2b292-7767-4172-92e0-847060c8bf0c",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "9CYbPetbM4d6EmAi",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        160,
+        0
+      ],
+      "id": "6e30e2ae-a54a-4e8f-a8b8-40b6fde3fb1c",
+      "name": "Get a message",
+      "webhookId": "8842d233-9887-48b9-bc21-8d5d4d7cc9d8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "9CYbPetbM4d6EmAi",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=\"D:\\MCA\\Project\\UC Inclusive Credit\\myvenv\\Scripts\\python.exe\" \"D:\\MCA\\Project\\UC Inclusive Credit\\vision_extractor.py\" \"D:\\MCA\\Project\\UC Inclusive Credit\\Data\\{{ $binary.attachment_0.fileName }}\""
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        560,
+        0
+      ],
+      "id": "1e9815e9-a1f4-4aa9-a954-c733106adacf",
+      "name": "Execute Command"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=D:\\MCA\\Project\\UC Inclusive Credit\\Data\\{{ $binary.attachment_0.fileName }}",
+        "dataPropertyName": "attachment_0",
+        "options": {
+          "append": false
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        336,
+        0
+      ],
+      "id": "e6079e62-8571-40d8-9d72-1555849837c3",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  {\n    \"model\": \"llama-3.1-8b-instant\",\n    \"messages\": [\n      {\n      \"role\": \"system\",\n      \"content\": \"You are a ruthless, precision-driven data extraction pipeline. Parse the noisy OCR receipt text into a precise JSON object with exactly four keys: Vendor, Invoice_Amount, Due_Date, Category. Obey these strict constraints:\\n\\n1. Vendor: Extract ONLY the primary business name. Strip all addresses, phone numbers, tax IDs and random punctuation. If gibberish, return null.\\n2. Invoice_Amount: The absolute final total charged. Never extract Subtotal, Tax, GST, Tender, Cash, Change or Rounding Adj. Output as clean numeric float, no currency symbols.\\n3. Due_Date: Find the transaction or invoice date. Standardize strictly to YYYY-MM-DD. Two-digit years like 18 means 2018. Look for keywords like Date, Tarikh, Invoice Date, or any DD/MM/YYYY pattern. If missing, return null.\\n4. Category: Infer one broad industry category from items purchased such as Grocery, Hardware, Pharmacy, Books, General Retail, Food and Beverage.\\n\\nReturn ONLY the raw JSON object. No markdown, no explanation, no preamble.\"\n    },\n      {\n        \"role\": \"user\",\n        \"content\": \"OCR Text:\\n\" + JSON.parse($json.stdout).raw_text\n      }\n    ],\n    \"response_format\": { \"type\": \"json_object\" },\n    \"temperature\": 0\n  }\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        768,
+        0
+      ],
+      "id": "dcab0247-a533-4d3c-b570-6042cece05dc",
+      "name": "HTTP Request",
+      "credentials": {
+        "groqApi": {
+          "id": "SC9xRnaqIXEBgFD9",
+          "name": "Groq account"
+        },
+        "httpHeaderAuth": {
+          "id": "Ow2BH6N9kpHuMI3b",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json;\nconst content = raw.choices[0].message.content;\n\nlet extracted;\ntry {\n  extracted = JSON.parse(content);\n} catch (e) {\n  const cleaned = content.replace(/```json|```/g, \"\").trim();\n  extracted = JSON.parse(cleaned);\n}\n\n// Accept both key names in case LLM disobeys\nconst rawDate = extracted.Due_Date || extracted.Invoice_Date;\n\n// Validate date — YYYY-MM-DD only\nlet due_date_clean = null;\nif (rawDate && rawDate !== \"null\") {\n  const dateRegex = /^\\d{4}-\\d{2}-\\d{2}$/;\n  if (dateRegex.test(rawDate)) {\n    const parsed = new Date(rawDate);\n    if (!isNaN(parsed.getTime())) {\n      due_date_clean = rawDate;\n    }\n  }\n}\n\n// Ageing: days from invoice date to today\nlet ageing_days = null;\nif (due_date_clean) {\n  const today = new Date();\n  today.setHours(0, 0, 0, 0);\n  ageing_days = Math.floor((today - new Date(due_date_clean)) / 86400000);\n}\n\n// FIX: strip currency symbols before parsing amount\n// Handles \"RM 23.50\", \"MYR23.50\", \"23,50\", \"$23.50\" etc.\nconst rawAmount = String(extracted.Invoice_Amount || \"0\")\n  .replace(/[^0-9.]/g, \"\")\n  .trim();\nconst cleanAmount = parseFloat(parseFloat(rawAmount || \"0\").toFixed(2));\n\n// Vendor sanity check\nlet finalVendor = (extracted.Vendor || \"\").trim();\nconst isGarbage = !finalVendor\n  || finalVendor.length > 60\n  || /^[\\d\\s\\W]+$/.test(finalVendor);\n\nif (isGarbage) {\n  finalVendor = \"MANUAL_REVIEW_REQUIRED\";\n}\n\nreturn {\n  json: {\n    Vendor:         finalVendor,\n    Invoice_Amount: cleanAmount,\n    Due_Date:       due_date_clean,\n    Category:       extracted.Category || \"Uncategorized\",\n    Ageing_Days:    ageing_days\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        0
+      ],
+      "id": "c549dbad-3d57-48c0-aa5f-b8d0170f9a9b",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $(\"Gmail Trigger\").item.json.id\n}}"
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1408,
+        0
+      ],
+      "id": "ac2571bc-c0c1-4cfd-9fa3-1f6fb3642196",
+      "name": "Mark a message as read",
+      "webhookId": "23ae8c4b-c56b-47b7-940d-2e426ffd1022",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "9CYbPetbM4d6EmAi",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1Gpm3dL0u2qr3cGVor4NC4BKGAwDDuHq-1rSFyvgoRv8/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "Vendor"
+          ],
+          "schema": [
+            {
+              "id": "Vendor",
+              "displayName": "Vendor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Invoice_Amount",
+              "displayName": "Invoice_Amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Due_Date",
+              "displayName": "Due_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Ageing_Days",
+              "displayName": "Ageing_Days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1184,
+        0
+      ],
+      "id": "9f86f363-4aed-4164-9f8c-8a21d764fa4e",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "vHjwVqHaiPja9H1j",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Execute Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Command": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Mark a message as read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4bc84712-71b7-4c68-a45f-ab01d84ccdb5",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6b19bd9c32019c78edb669143955d59a759b09b557b7c1fadf1d64ce9ace156e"
+  },
+  "id": "gxZFViQktjZj70BM",
+  "tags": []
+}
